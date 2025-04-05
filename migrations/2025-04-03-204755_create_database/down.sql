@@ -12,6 +12,18 @@ DROP INDEX idx_group_members_group_id;
 
 DROP INDEX idx_group_members_client_id;
 
+DROP INDEX idx_messages_group_id;
+
+DROP INDEX idx_messages_sender_client_id;
+
+DROP INDEX idx_messages_sent_timestamp;
+
+DROP INDEX idx_messages_group_epoch;
+
+DROP INDEX idx_messages_group_timestamp;
+
+DROP TABLE message;
+
 DROP TABLE group_members;
 
 DROP TABLE key_packages;

@@ -5,7 +5,7 @@ diesel::table! {
         client_id -> Uuid,
         client_identity -> Bytea,
         registration_timestamp -> Timestamptz,
-        metadata -> Nullable<Jsonb>,
+        public_key -> Jsonb,
     }
 }
 
@@ -23,25 +23,30 @@ diesel::table! {
         creator_client_id -> Nullable<Uuid>,
         creation_timestamp -> Timestamptz,
         group_name -> Nullable<Text>,
-        metadata -> Nullable<Jsonb>,
     }
 }
 
 diesel::table! {
-    key_packages (key_package_hash) {
-        key_package_hash -> Bytea,
+    key_packages (key_package_id) {
+        key_package_id -> Uuid,
         client_id -> Uuid,
         key_package_data -> Bytea,
         publication_timestamp -> Timestamptz,
-        protocol_version -> Nullable<Text>,
-        cipher_suites -> Nullable<Jsonb>,
         is_active -> Bool,
     }
 }
 
-diesel::joinable!(group_members -> clients (client_id));
-diesel::joinable!(group_members -> groups (group_id));
-diesel::joinable!(groups -> clients (creator_client_id));
+diesel::table! {
+    messages (message_id) {
+        message_id -> Int8,
+        group_id -> Bytea,
+        sender_client_id -> Nullable<Uuid>,
+        message_data -> Bytea,
+        sent_timestamp -> Timestamptz,
+        epoch -> Int8,
+    }
+}
+
 diesel::joinable!(key_packages -> clients (client_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
@@ -49,4 +54,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     group_members,
     groups,
     key_packages,
+    messages,
 );
