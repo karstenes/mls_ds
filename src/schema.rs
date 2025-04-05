@@ -47,7 +47,20 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    welcomes (welcome_id) {
+        welcome_id -> Uuid,
+        new_member -> Uuid,
+        group_id -> Bytea,
+        welcome_data -> Bytea,
+        sender_client_id -> Nullable<Bytea>,
+        sent_timestamp -> Timestamptz,
+    }
+}
+
 diesel::joinable!(key_packages -> clients (client_id));
+diesel::joinable!(welcomes -> clients (new_member));
+diesel::joinable!(welcomes -> groups (group_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     clients,
@@ -55,4 +68,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     groups,
     key_packages,
     messages,
+    welcomes,
 );

@@ -12,10 +12,10 @@ use openmls::{credentials::CredentialWithKey, key_packages, framing::MlsMessageB
 use actix_web::{self, cookie::{CookieBuilder, Key}, error::ErrorUnauthorized, web::{self, get, post, Json}, App, HttpResponse, HttpServer};
 use uuid::{Bytes, Uuid};
 use self::models::*;
-use diesel::{dsl::{exists, insert_into}, prelude::*, query_dsl::methods::FilterDsl, update, BelongingToDsl};
+use diesel::{dsl::{exists, insert_into}, prelude::*, query_dsl::{self, methods::FilterDsl}, update, BelongingToDsl};
 use diesel_async::{pooled_connection::{bb8::Pool, AsyncDieselConnectionManager}, AsyncPgConnection, RunQueryDsl};
 use dotenvy::dotenv;
-use schema::{clients::dsl::*, group_members::group_id, groups, key_packages::dsl::*};
+use schema::{clients::dsl::*, group_members::{self, group_id}, groups, key_packages::dsl::*, welcomes::{self, welcome_data}};
 use actix_session::{config::PersistentSession, storage::CookieSessionStore, Session, SessionMiddleware};
 
 #[derive(Serialize, Deserialize)]
@@ -38,10 +38,24 @@ struct KeyPackageRequest {
     identity: String
 }
 
+
 #[derive(Debug, Deserialize, Serialize)]
-struct Message {
+struct WelcomeMessage {
+    recipient: Vec<u8>,
+    group: Vec<u8>,
     message_bytes: Vec<u8>
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+struct GroupMessage {
+    message_bytes: Vec<u8>
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct MessageRequest {
+    group_id: Vec<u8>
+}
+
 
 fn check_auth(session: &Session) -> Result<Uuid, actix_web::Error> {
     match session.get::<u128>("id")? {
@@ -153,7 +167,7 @@ async fn init_credential(session: Session, pool: web::Data<Pool<AsyncPgConnectio
             .execute(&mut conn)
             .await
             .unwrap();
-        session.insert("id", user_uuid.to_u128_le());
+        session.insert("id", user_uuid.to_u128_le()).unwrap();
 
         HttpResponse::Ok().finish()
 
@@ -162,7 +176,7 @@ async fn init_credential(session: Session, pool: web::Data<Pool<AsyncPgConnectio
     }
 }
 
-async fn create_group(session: Session, pool: web::Data<Pool<AsyncPgConnection>>, commit: Json<Message>) -> HttpResponse {
+async fn create_group(session: Session, pool: web::Data<Pool<AsyncPgConnection>>, commit: Json<GroupMessage>) -> HttpResponse {
     let user_uuid = match check_auth(&session) {
         Ok(v) => v,
         Err(e) => return HttpResponse::from_error(e)
@@ -219,6 +233,198 @@ async fn create_group(session: Session, pool: web::Data<Pool<AsyncPgConnection>>
     HttpResponse::Ok().finish()
 }
 
+async fn add_member(session: Session, pool: web::Data<Pool<AsyncPgConnection>>, welcome: Json<WelcomeMessage>) -> HttpResponse {
+    let user_uuid = match check_auth(&session) {
+        Ok(v) => v,
+        Err(e) => return HttpResponse::from_error(e)
+    };
+
+    let mut conn = match pool.get().await {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().finish()
+    };
+
+    let message = welcome.into_inner();
+
+    let welcome_exists: bool = diesel::select(
+        exists(
+            diesel::QueryDsl::filter(
+                welcomes::table,
+                schema::welcomes::group_id.eq(&message.group)
+            )
+        )
+    ).get_result(&mut conn)
+    .await
+    .unwrap();
+
+    if welcome_exists {
+        return HttpResponse::BadRequest().body("welcome exists");
+    }
+
+    let new_member: Client = diesel::QueryDsl::filter(schema::clients::table, schema::clients::client_identity.eq(&message.recipient))
+        .first(&mut conn)
+        .await
+        .unwrap();
+
+    let group: Group = diesel::QueryDsl::filter(schema::groups::table, schema::groups::group_id.eq(&message.group))
+    .first(&mut conn)
+    .await
+    .unwrap();
+
+    let new_welcome = NewWelcome {
+        welcome_id: Uuid::now_v7(),
+        group_id: group.group_id.clone(),
+        new_member: new_member.client_id,
+        welcome_data: message.message_bytes,
+        sender_client_id: None,
+        sent_timestamp: None
+    };
+
+    insert_into(welcomes::table)
+        .values(&new_welcome)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+    let new_membership = NewGroupMember {
+        group_id: group.group_id,
+        client_id: new_member.client_id,
+        join_timestamp: None
+    };
+
+    insert_into(group_members::table)
+        .values(&new_membership)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+    HttpResponse::Ok().finish()
+}
+
+async fn get_welcomes(session: Session, pool: web::Data<Pool<AsyncPgConnection>>) -> HttpResponse {
+    let user_uuid = match check_auth(&session) {
+        Ok(v) => v,
+        Err(e) => return HttpResponse::from_error(e)
+    };
+
+    let mut conn = match pool.get().await {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().finish()
+    };
+    
+    let client: Client = diesel::QueryDsl::filter(schema::clients::table, schema::clients::client_id.eq(user_uuid))
+        .first(&mut conn)
+        .await
+        .unwrap();
+
+    let user_welcomes: Vec<models::Welcome> = crate::models::Welcome::belonging_to(&client)
+        .load(&mut conn)
+        .await
+        .unwrap();
+
+    let user_welcomes_data: Vec<Vec<u8>> = user_welcomes.iter().map(|x| x.welcome_data.clone()).collect();
+
+    diesel::delete(diesel::QueryDsl::filter(welcomes::table, welcomes::new_member.eq(&user_uuid)))
+        .execute(&mut conn).await.unwrap();
+
+    HttpResponse::Ok().json(user_welcomes_data)
+}
+
+async fn send_message(session: Session, pool: web::Data<Pool<AsyncPgConnection>>, message: Json<GroupMessage>) -> HttpResponse {
+    let user_uuid = match check_auth(&session) {
+        Ok(v) => v,
+        Err(e) => return HttpResponse::from_error(e)
+    };
+
+    let mut conn = match pool.get().await {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().finish()
+    };
+
+    let message_content = message.into_inner();
+
+    let message_generic = MlsMessageIn::tls_deserialize_bytes(&message_content.message_bytes).unwrap().0;
+
+    let protocol_message: ProtocolMessage = match message_generic.extract() {
+        PrivateMessage(m) => m.into(),
+        PublicMessage(m) => m.into(),
+        _ => return HttpResponse::BadRequest().finish()
+    };
+
+    let group = protocol_message.group_id();
+
+    let in_group: bool = diesel::select(
+        exists(
+            diesel::QueryDsl::filter(
+                group_members::table,
+                schema::group_members::group_id.eq(&group.to_vec()).and(schema::group_members::client_id.eq(&user_uuid))
+            )
+        )
+    ).get_result(&mut conn)
+    .await
+    .unwrap();
+
+    if !in_group {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+    let epoch = protocol_message.epoch();
+
+    let new_message = NewMessage {
+        message_id: None,
+        group_id: group.to_vec(),
+        sender_client_id: Some(user_uuid),
+        message_data: message_content.message_bytes,
+        sent_timestamp: None,
+        epoch: epoch.as_u64() as i64
+    };
+
+    insert_into(schema::messages::table)
+        .values(&new_message)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+    HttpResponse::Ok().finish()
+}
+
+async fn get_messages(session: Session, pool: web::Data<Pool<AsyncPgConnection>>, group: web::Path<MessageRequest>) -> HttpResponse {
+    let user_uuid = match check_auth(&session) {
+        Ok(v) => v,
+        Err(e) => return HttpResponse::from_error(e)
+    };
+
+    let mut conn = match pool.get().await {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().finish()
+    };
+
+    let in_group: bool = diesel::select(
+        exists(
+            diesel::QueryDsl::filter(
+                group_members::table,
+                schema::group_members::group_id.eq(&group.group_id).and(schema::group_members::client_id.eq(&user_uuid))
+            )
+        )
+    ).get_result(&mut conn)
+    .await
+    .unwrap();
+
+    if !in_group {
+        return HttpResponse::Unauthorized().finish();
+    }
+
+
+    let user_messages: Vec<crate::models::Message> = diesel::QueryDsl::filter(schema::messages::table, schema::messages::sender_client_id.eq(&user_uuid).and(schema::messages::group_id.eq(&group.group_id)))
+        .load(&mut conn)
+        .await
+        .unwrap();
+
+    let messages_raw: Vec<Vec<u8>> = user_messages.iter().map(|x| x.message_data.clone()).collect();
+
+    HttpResponse::Ok().json(messages_raw)
+}
+
 #[actix_web::main]
 async fn main() -> Result<(), std::io::Error> {
     dotenv().ok();
@@ -242,6 +448,10 @@ async fn main() -> Result<(), std::io::Error> {
             .route("/init_credential", post().to(init_credential))
             .route("/get_key_package/{identity}", get().to(get_key_package))
             .route("/create_group", post().to(create_group))
+            .route("/add_member", post().to(add_member))
+            .route("/get_welcomes", get().to(get_welcomes))
+            .route("/send_message", post().to(send_message))
+            .route("/get_messages/{group_id}", get().to(get_messages))
     })
     .bind(("127.0.0.1", 8888))?
     .run()

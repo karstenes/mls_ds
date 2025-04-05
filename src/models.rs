@@ -26,10 +26,18 @@ pub struct NewClient {
 #[derive(Queryable, Selectable)]
 #[diesel(table_name = crate::schema::group_members)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct GroupMembers {
-    group_id: Vec<u8>,
-    client_id: Uuid,
-    join_timestamp: PrimitiveDateTime,
+pub struct GroupMember {
+    pub group_id: Vec<u8>,
+    pub client_id: Uuid,
+    pub join_timestamp: PrimitiveDateTime,
+}
+
+#[derive(Insertable, AsChangeset)]
+#[diesel(table_name = crate::schema::group_members)]
+pub struct NewGroupMember {
+    pub group_id: Vec<u8>,
+    pub client_id: Uuid,
+    pub join_timestamp: Option<PrimitiveDateTime>
 }
 
 #[derive(Queryable, Selectable, Identifiable)]
@@ -37,10 +45,10 @@ pub struct GroupMembers {
 #[diesel(table_name = crate::schema::groups)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Group {
-    group_id: Vec<u8>,
-    creator_client_id: Option<Uuid>,
-    creation_timestamp: PrimitiveDateTime,
-    group_name: Option<String>,
+    pub group_id: Vec<u8>,
+    pub creator_client_id: Option<Uuid>,
+    pub creation_timestamp: PrimitiveDateTime,
+    pub group_name: Option<String>,
 }
 
 #[derive(Insertable, AsChangeset)]
@@ -79,10 +87,46 @@ pub struct NewKeyPackage {
 #[diesel(table_name = crate::schema::messages)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Message {
-    message_id: i64,
-    group_id: Vec<u8>,
-    sender_client_id: Option<Uuid>,
-    message_data: Vec<u8>,
-    sent_timestamp: PrimitiveDateTime,
-    epoch: i64,
+    pub message_id: i64,
+    pub group_id: Vec<u8>,
+    pub sender_client_id: Option<Uuid>,
+    pub message_data: Vec<u8>,
+    pub sent_timestamp: PrimitiveDateTime,
+    pub epoch: i64,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = crate::schema::messages)]
+pub struct NewMessage {
+    pub message_id: Option<i64>,
+    pub group_id: Vec<u8>,
+    pub sender_client_id: Option<Uuid>,
+    pub message_data: Vec<u8>,
+    pub sent_timestamp: Option<PrimitiveDateTime>,
+    pub epoch: i64,
+}
+
+#[derive(Queryable, Selectable, Associations, Identifiable)]
+#[diesel(primary_key(welcome_id))]
+#[diesel(belongs_to(Client, foreign_key = new_member))]
+#[diesel(table_name = crate::schema::welcomes)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct Welcome {
+    pub welcome_id: Uuid,
+    pub new_member: Uuid,
+    pub group_id: Vec<u8>,
+    pub welcome_data: Vec<u8>,
+    pub sender_client_id: Option<Vec<u8>>,
+    pub sent_timestamp: PrimitiveDateTime
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = crate::schema::welcomes)]
+pub struct NewWelcome {
+    pub welcome_id: Uuid,
+    pub new_member: Uuid,
+    pub group_id: Vec<u8>,
+    pub welcome_data: Vec<u8>,
+    pub sender_client_id: Option<Vec<u8>>,
+    pub sent_timestamp: Option<PrimitiveDateTime>
 }
