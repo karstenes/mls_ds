@@ -26,13 +26,6 @@ pub struct SignedCredential {
     pub signed_bytes: Vec<u8>,
 }
 
-
-#[derive(Debug, Deserialize)]
-struct PublishCredentialRequest {
-    key_package: key_packages::KeyPackage,
-    identity: String
-}
-
 #[derive(Debug, Deserialize)]
 struct KeyPackageRequest {
     identity: String

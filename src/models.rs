@@ -23,7 +23,8 @@ pub struct NewClient {
     pub public_key: serde_json::Value,
 }
 
-#[derive(Queryable, Selectable)]
+#[derive(Queryable, Selectable, Identifiable)]
+#[diesel(primary_key(group_id, client_id))]
 #[diesel(table_name = crate::schema::group_members)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct GroupMember {
